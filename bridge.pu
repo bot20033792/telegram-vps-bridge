@@ -1,1 +1,73 @@
 
+import os
+from flask import Flask, request, Response
+import requests
+
+app = Flask(__name__)
+
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+BRIDGE_KEY = os.environ.get("BRIDGE_KEY")
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    return "Telegram bridge is OK", 200
+
+
+@app.route("/telegram/<method>", methods=["GET", "POST"])
+def telegram_proxy(method):
+    if not BRIDGE_KEY or request.headers.get("X-Bridge-Key") != BRIDGE_KEY:
+        return "Unauthorized", 401
+
+    if not TELEGRAM_BOT_TOKEN:
+        return "Telegram token is not configured", 500
+
+    if not method.replace("_", "").isalnum():
+        return "Invalid method", 400
+
+    telegram_url = (
+        f"https://api.telegram.org/bot"
+        f"{TELEGRAM_BOT_TOKEN}/{method}"
+    )
+
+    try:
+        response = requests.request(
+            method=request.method,
+            url=telegram_url,
+            params=request.args,
+            data=request.get_data(),
+            headers={
+                "Content-Type": request.headers.get(
+                    "Content-Type",
+                    "application/json"
+                )
+            },
+            timeout=35
+        )
+
+        excluded = {
+            "content-encoding",
+            "content-length",
+            "transfer-encoding",
+            "connection",
+        }
+
+        headers = [
+            (k, v)
+            for k, v in response.headers.items()
+            if k.lower() not in excluded
+        ]
+
+        return Response(
+            response.content,
+            status=response.status_code,
+            headers=headers
+        )
+
+    except requests.RequestException as e:
+        return f"Telegram request failed: {e}", 502
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", "10000"))
+    app.run(host="0.0.0.0", port=port)
